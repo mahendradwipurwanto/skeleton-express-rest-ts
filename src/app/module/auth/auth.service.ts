@@ -21,11 +21,10 @@ export class AuthService {
     ) {
     }
 
-    async GetRefreshToken(token: string, ip: string) {
+    async GetRefreshToken(token: string) {
         return this.authRepository.findOneBy(
             {
-                token: token,
-                ip_address: ip
+                token: token
             }
         );
     }
@@ -44,19 +43,16 @@ export class AuthService {
             .execute();
     }
 
-    async GetOtp(data: string, code?: number) {
+    async GetOtp(data: string, code: number, type: string) {
         const [queryBuilder] = await Promise.all([this.otpRepository.createQueryBuilder('otp')]);
         queryBuilder.select([
             'otp.id',
             'otp.user_id',
             'otp.data',
             'otp.code',
+            'otp.type',
             'otp.created_at'
-        ]).where('otp.data = :data', {data})
-
-        if (code) {
-            queryBuilder.andWhere('otp.code = :code', {code});
-        }
+        ]).where('otp.data = :data AND otp.type = :type AND otp.code = :code', { data, type, code });
 
         const otp = await queryBuilder.getOne();
         if (!otp) {
@@ -104,7 +100,7 @@ export class AuthService {
         try {
             // Check if an OTP entry already exists for the given `data`
             const existingOtp = await this.otpRepository.findOne({
-                where: { data: data.data },
+                where: {data: data.data},
             });
 
             if (existingOtp) {
@@ -118,6 +114,7 @@ export class AuthService {
                     user_id: data.user_id,
                     data: data.data,
                     code: data.code,
+                    type: data.type,
                     created_at: new Date(),
                 });
                 await queryRunner.manager.save(newOtp);
@@ -139,11 +136,10 @@ export class AuthService {
         this.otpRepository.remove(data);
     }
 
-    async DeleteRefreshToken(user_id: string, ip: string) {
+    async DeleteRefreshToken(user_id: string) {
         return this.authRepository.delete(
             {
-                user_id,
-                ip_address: ip
+                user_id
             }
         );
     }

@@ -1,4 +1,4 @@
-import {Repository} from "typeorm";
+import {getMetadataArgsStorage, Repository} from "typeorm";
 import dayjs from "dayjs";
 import timezone from "dayjs/plugin/timezone";
 import utc from "dayjs/plugin/utc";
@@ -51,6 +51,7 @@ export class UserService {
             'role.is_default',
             'user_data.id',
             'user_data.name',
+            'user_data.profile',
             'user_data.province',
             'user_data.city',
             'user_data.district',
@@ -128,6 +129,7 @@ export class UserService {
                 'role.is_default',
                 'user_data.id',
                 'user_data.name',
+                'user_data.profile',
                 'user_data.province',
                 'user_data.city',
                 'user_data.district',
@@ -162,7 +164,7 @@ export class UserService {
     }
 
 
-    async Create(data: UserDto): Promise<User | null>  {
+    async Create(data: UserDto): Promise<User | null> {
         // Get the query runner from the user repository's manager
         const queryRunner = this.userRepository.manager.connection.createQueryRunner();
 
@@ -282,32 +284,65 @@ export class UserService {
         }
     }
 
-    // update patch user
-    async UpdateUserPatch(id: string, data: Partial<UserDto>) {
+    async UpdateUserPatch(id: string, data: Record<string, any>) {
         const queryRunner = this.userRepository.manager.connection.createQueryRunner();
         await queryRunner.startTransaction();
 
         try {
-            const user = await this.userRepository.findOneBy({id});
+            // Fetch the user and include user_data relation
+            const user = await queryRunner.manager.findOne(EntityUser, {where: {id}, relations: ['user_data']});
             if (!user) throw new CustomHttpExceptionError(`User not found with id ${id}`, 404);
 
-            if (!user.username) {
-                data.username = await CreateSlug(await CreateNameFromEmail(user.email) + "-" + await GenerateRandomNumber(4));
+            // Get columns dynamically from the metadata
+            const userColumns = getMetadataArgsStorage()
+                .columns.filter((col) => col.target === EntityUser)
+                .map((col) => col.propertyName);
+
+            const userDataColumns = getMetadataArgsStorage()
+                .columns.filter((col) => col.target === EntityUserData)
+                .map((col) => col.propertyName);
+
+            // Separate fields for EntityUser and EntityUserData
+            const userUpdates = Object.fromEntries(
+                Object.entries(data).filter(([key]) => userColumns.includes(key))
+            );
+
+            const userDataUpdates = Object.fromEntries(
+                Object.entries(data).filter(([key]) => userDataColumns.includes(key))
+            );
+
+            // Update EntityUser fields
+            Object.assign(user, userUpdates);
+
+            // Update EntityUserData fields
+            if (Object.keys(userDataUpdates).length > 0) {
+                let userData = user.user_data;
+
+                // Create a new user_data entity if it doesn't exist
+                if (!userData) {
+                    userData = new EntityUserData();
+                    userData.user_id = user.id;
+                }
+
+                // Assign fields to user_data
+                Object.assign(userData, userDataUpdates);
+
+                // Save user_data
+                await queryRunner.manager.save(EntityUserData, userData);
             }
 
-            /**
-             * UPDATE USER PROFILE
-             */
-            Object.assign(user, data);
+            // Save the user entity
             await queryRunner.manager.save(EntityUser, user);
 
+            // Commit transaction
             await queryRunner.commitTransaction();
 
+            // Fetch updated user data
             const userData = await this.GetUserByParams({email: user.email});
 
             return {
                 data: userData,
-                message: "User profile updated successfully"
+                message: "User profile updated successfully",
             };
         } catch (error) {
             // Rollback transaction in case of an error

@@ -9,6 +9,7 @@ import {EntityUserData} from "@/app/module/users/userData.model";
 import {EntityUserToken, EntityOtpData} from "@/app/module/auth/auth.model";
 
 import {EntityRole} from "@/app/module/role/role.model";
+import {EntityNotification} from "@/app/module/profile/profile.model";
 
 dotenv.config();
 
@@ -26,6 +27,7 @@ const options: DataSourceOptions & SeederOptions = {
         EntityUserData,
         EntityUserToken,
         EntityOtpData,
+        EntityNotification,
         EntityRole
     ],
     migrations: [join(__dirname, '/migrations/**/*{.ts,.js}')],

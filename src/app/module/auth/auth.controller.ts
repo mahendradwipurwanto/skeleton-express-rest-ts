@@ -1,6 +1,6 @@
 import {Router} from "express";
 import dayjs from "dayjs";
-import {ConvertTimestampToDayjs} from "@/lib/helper/common";
+import {ConvertTimestampToDayjs, GetTimestamp} from "@/lib/helper/common";
 
 import {Limiter} from "../../middleware/limiter";
 import ValidatorMiddleware from "../../middleware/validator";
@@ -8,7 +8,6 @@ import {ResponseSuccessBuilder} from "@/lib/helper/response";
 import logger from "@/lib/helper/logger";
 import {sendEmail} from "@/lib/gateway/mailer";
 
-import {TokenData} from "@/lib/types/data/authentication";
 import {CustomHttpExceptionError} from "@/lib/helper/customError";
 import {TokenJwtGenerator, TokenJwtVerification} from "@/lib/auth/token";
 import {DecryptMessage, EncryptMessage} from "@/lib/auth/signature";
@@ -17,11 +16,20 @@ import {UserService} from "../users/users.service";
 import {AuthService} from "./auth.service";
 import {RoleService} from "@/app/module/role/role.service";
 
-import {ForgotPasswordDto, RefreshTokenDto, ResendOtpDto, SetupPinDto, SignInDto, VerifyOtpDto} from "./auth.dto";
+import {
+    ForgotPasswordDto,
+    RefreshTokenDto,
+    ResendOtpDto,
+    ResetPasswordDto,
+    SetupPinDto,
+    SignInDto,
+    VerifyOtpDto
+} from "./auth.dto";
 import {UserDto} from "@/app/module/users/users.dto";
-import {TransformPermissionsAsync} from "@/lib/helper/roles";
-import {HandleOtpGeneration} from "@/lib/helper/otpHandler";
+import {HandleOtpGeneration} from "@/lib/helper/authHandler";
 import GetRegisteredField from "@/lib/helper/registerHandler";
+import {generateTokenJWT} from "@/lib/helper/authHandler";
+import {HashPassword, VerifyPassword} from "@/lib/helper/authHandler";
 
 
 export class AuthController {
@@ -45,6 +53,7 @@ export class AuthController {
         this.router.post('/forgot-password', Limiter(5 * 1000, 10), ValidatorMiddleware(ForgotPasswordDto), this.forgotPassword);
         this.router.post('/verify-otp', Limiter(180 * 100, 3), ValidatorMiddleware(VerifyOtpDto), this.verifyOtp);
         this.router.post('/resend-otp', Limiter(60 * 100, 1), ValidatorMiddleware(ResendOtpDto), this.resendOtp);
+        this.router.post('/reset-password', Limiter(5 * 1000, 10), ValidatorMiddleware(ResetPasswordDto), this.resetPassword);
         this.router.post('/refresh-token', ValidatorMiddleware(RefreshTokenDto), this.refreshAccessToken);
         this.router.post('/logout', Limiter(5 * 1000, 10), ValidatorMiddleware(RefreshTokenDto), this.logout);
     }
@@ -53,23 +62,33 @@ export class AuthController {
         try {
             const payload: SignInDto = req.body;
 
-            // Fetch the user by phone number
+            // Fetch the user by email
             const user = await this.userService.GetUserByParams({email: payload.email});
             if (!user) {
                 throw new CustomHttpExceptionError('Your email is not registered', 401);
             }
 
-            //check if pin exist
-            if (!user.pin) {
-                // Encrypt the message (for signature)
-                const signature = await EncryptMessage(`${user.email}`);
+            // Check if type is 0 and validate password
+            if (payload.type === 0) {
+                if (!payload.password) {
+                    throw new CustomHttpExceptionError('Password is required for type 0 login', 400);
+                }
 
-                // Respond with success
+                const isPasswordValid = await VerifyPassword(payload.password, user.password);
+                if (!isPasswordValid) {
+                    throw new CustomHttpExceptionError('Invalid password', 401);
+                }
+            }
+
+            // Check if PIN exists
+            if (!user.pin) {
+                const signature = await EncryptMessage(`${user.email}`);
                 return ResponseSuccessBuilder(res, 202001, "You need to setup a PIN first before use your account", {signature});
             }
 
-            // Respond with success
-            return ResponseSuccessBuilder(res, 200, "Success", user);
+            const TokenUser = await generateTokenJWT(user, this.authService);
+
+            return ResponseSuccessBuilder(res, 200, "Success", TokenUser);
         } catch (error) {
             next(error);
         }
@@ -79,6 +98,11 @@ export class AuthController {
         try {
             const payload: UserDto = req.body;
 
+            // Validate payload for type 0
+            if (payload.type === 0 && !payload.password) {
+                throw new CustomHttpExceptionError('Password is required for type 0', 400);
+            }
+
             const checkUser = await this.userService.GetUserByParams({
                 email: payload.email,
                 user_data: {
@@ -86,55 +110,39 @@ export class AuthController {
                 }
             }, "OR");
 
-            if (checkUser) { // Use the dynamic function to check which field is already registered
+            if (checkUser) {
                 const registeredField = GetRegisteredField(checkUser, payload, ['email', 'user_data.phone']);
-
                 throw new CustomHttpExceptionError(`${registeredField} already registered`, 400);
             }
 
-            // get default role id
+            // Get default role ID
             const role = await this.roleService.GetDefaultRole();
-
-            // if role not found
             if (!role) {
                 throw new CustomHttpExceptionError('Default role not found', 500);
+            }
+
+            // Hash password if type is 0
+            if (payload.type === 0) {
+                payload.password = await HashPassword(payload.password);
             }
 
             const user = await this.userService.Create({
                 ...payload,
                 role_id: role.id
-            });
+            })
 
-            // Generate OTP-related data
-            const generated_otp = await HandleOtpGeneration(user, this.authService)
+            const timestamp = await GetTimestamp();
+            const message = `${user.email}|${timestamp}`;
 
             // Encrypt the message (for signature)
-            const signature = await EncryptMessage(generated_otp.message);
+            const signature = await EncryptMessage(message);
 
-            logger.info(`[AUTH] Generated OTP: ${generated_otp.code} for user ${user.email}`);
-
-            /**
-             * SEND OTP EMAIL
-             */
-                // Define the email subject
-            const subject = `Your OTP Code ${generated_otp.code}`;
-
-            // Choose whether to use the HTML template or plaintext message
-            const template = '/otp.html'; // Or null if you want to send plaintext
-            const params = {otp: generated_otp}; // Params for the template
-
-            // Send the OTP email
-            await sendEmail(
-                user.email, subject, template, params
-            );
-
-            return ResponseSuccessBuilder(res, 201, 'Berhasil menambahkan data user.', {signature});
+            return ResponseSuccessBuilder(res, 201, 'Success register the user', {signature});
         } catch (error) {
             console.log(error);
-
             next(error);
         }
-    }
+    };
 
     // Setup pin
     setupPin = async (req, res, next) => {
@@ -153,17 +161,18 @@ export class AuthController {
                 throw new CustomHttpExceptionError('Your email is not registered', 401);
             }
 
+            const TokenUser = await generateTokenJWT(user, this.authService);
+
             //check if pin exist
             if (user.pin) {
                 // Respond with success
-                return ResponseSuccessBuilder(res, 202002, "Your account already setup pin", user);
+                return ResponseSuccessBuilder(res, 200, "Your account already setup pin", TokenUser);
             }
 
             // Update the user's pin
-            const userData = await this.userService.UpdateUserPatch(user.id, {pin: payload.pin});
+            await this.userService.UpdateUserPatch(user.id, {pin: payload.pin});
 
-            // Respond with success
-            return ResponseSuccessBuilder(res, 200, userData.message, userData.data);
+            return ResponseSuccessBuilder(res, 200, "Berhasil memverifikasi kode OTP", TokenUser);
         } catch (error) {
             next(error);
         }
@@ -181,7 +190,7 @@ export class AuthController {
             }
 
             // Generate OTP-related data
-            const generated_otp = await HandleOtpGeneration(user, this.authService)
+            const generated_otp = await HandleOtpGeneration(user, this.authService, "reset-password")
 
             // Encrypt the message (for signature)
             const signature = await EncryptMessage(generated_otp.message);
@@ -211,7 +220,6 @@ export class AuthController {
 
     verifyOtp = async (req, res, next) => {
         try {
-            const ip: string = req.ip;
             const payload: VerifyOtpDto = req.body;
             const decryptedMessage = await DecryptMessage(payload.signature);
             const email = decryptedMessage.split("|")[0];
@@ -219,38 +227,16 @@ export class AuthController {
             if (!user) {
                 throw new CustomHttpExceptionError('Invalid signature', 401);
             }
-            const otp = await this.authService.GetOtp(decryptedMessage, payload.code);
+            const otp = await this.authService.GetOtp(decryptedMessage, payload.code, "reset-password");
             await this.authService.VerifyOtp(otp);
 
-            const metadata: TokenData = {
-                id: user.id,
-                email: user.email,
-                name: user.user_data.name,
-                role: user.role.name,
-                permissions: await TransformPermissionsAsync(user.role.permissions) || null,
-                date: new Date().toLocaleString('id-ID', {timeZone: 'Asia/Jakarta'}),
-                expired: new Date(Date.now() + parseInt(process.env.JWT_ACCESS_TOKEN_EXP) * 1000).toLocaleString('id-ID', {timeZone: 'Asia/Jakarta'})
-            }
+            const timestamp = await GetTimestamp();
+            const message = `${user.email}|${timestamp}`;
 
-            // generate jwt token
-            const accessToken = await TokenJwtGenerator(metadata, process.env.JWT_ACCESS_TOKEN_EXP, false);
-            const refreshToken = await TokenJwtGenerator(metadata, process.env.JWT_REFRESH_TOKEN_EXP, true);
+            // Encrypt the message (for signature)
+            const signature = await EncryptMessage(message);
 
-            // store refresh token to database
-            await this.authService.StoreRefreshToken(metadata.id, refreshToken, ip);
-            req.id = metadata.id;
-            req.name = metadata.name
-            req.email = metadata.email;
-            return ResponseSuccessBuilder(res, 200, "Berhasil memverifikasi kode OTP", {
-                access_token: accessToken,
-                refresh_token: refreshToken,
-                data: {
-                    name: metadata.name,
-                    email: metadata.email,
-                    username: user.username
-                },
-                expired_in: parseInt(process.env.JWT_ACCESS_TOKEN_EXP),
-            });
+            return ResponseSuccessBuilder(res, 200, "Berhasil memverifikasi kode OTP", {signature});
         } catch (error) {
             next(error);
         }
@@ -304,7 +290,7 @@ export class AuthController {
             }
 
             // Generate OTP-related data
-            const generated_otp = await HandleOtpGeneration(user, this.authService)
+            const generated_otp = await HandleOtpGeneration(user, this.authService, "reset-password")
 
             // Encrypt the message (for signature)
             const signature = await EncryptMessage(generated_otp.message);
@@ -332,13 +318,41 @@ export class AuthController {
         }
     };
 
+    resetPassword = async (req, res, next) => {
+        try {
+            const payload: ResetPasswordDto = req.body;
+
+            // Decrypt the incoming signature and extract information
+            const decryptedMessage = await DecryptMessage(payload.signature);
+            const email = decryptedMessage.split("|")[0];
+
+            // Fetch the user by email
+            const user = await this.userService.GetUserByParams({ email });
+            if (!user) {
+                throw new CustomHttpExceptionError('Your email is not registered', 401);
+            }
+
+            // Hash the new password
+            const hashedPassword = await HashPassword(payload.password);
+
+            // Update the user's password
+            await this.userService.UpdateUserPatch(user.id, { password: hashedPassword });
+
+            const TokenUser = await generateTokenJWT(user, this.authService);
+
+            return ResponseSuccessBuilder(res, 200, "Success", TokenUser);
+        } catch (error) {
+            next(error);
+        }
+    };
+
+
     refreshAccessToken = async (req, res, next) => {
         try {
-            const ip: string = req.ip;
             const refreshTokenDto: RefreshTokenDto = req.body;
-            const token = await this.authService.GetRefreshToken(refreshTokenDto.token, ip);
+            const token = await this.authService.GetRefreshToken(refreshTokenDto.refresh_token);
             if (!token) {
-                throw new CustomHttpExceptionError('Token tidak sesuai', 401);
+                throw new CustomHttpExceptionError('Invalid token', 400);
             }
 
             // jwt verify
@@ -357,10 +371,9 @@ export class AuthController {
 
     logout = async (req, res, next) => {
         try {
-            const ip: string = req.ip;
             const refreshTokenDto: RefreshTokenDto = req.body;
-            const metadata = await TokenJwtVerification(refreshTokenDto.token, true);
-            await this.authService.DeleteRefreshToken(metadata.id, ip);
+            const metadata = await TokenJwtVerification(refreshTokenDto.refresh_token, true);
+            await this.authService.DeleteRefreshToken(metadata.id);
             ResponseSuccessBuilder(res, 200, 'Logout success', null);
         } catch (error) {
             next(error);

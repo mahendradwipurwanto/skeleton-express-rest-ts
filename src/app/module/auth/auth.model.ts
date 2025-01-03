@@ -32,6 +32,9 @@ export class EntityOtpData {
     @Column({type: 'int', nullable: false})
     code: number;
 
+    @Column({type: 'varchar', nullable: true})
+    type: string;
+
     @CreateDateColumn({type: 'timestamp'})
     created_at: Date;
 }

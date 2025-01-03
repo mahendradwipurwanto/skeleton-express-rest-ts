@@ -1,9 +1,20 @@
-import {IsNotEmpty, IsNumber, IsString} from "class-validator";
+import {IsNotEmpty, IsNumber, IsOptional, IsString, Matches} from "class-validator";
 
 export class SignInDto {
     @IsNotEmpty({message: "Email can't be empty"})
     @IsString({message: "Email is not valid"})
     email: string;
+
+    @IsOptional()
+    @IsNotEmpty({message: "Password can't be empty"})
+    @IsString({message: "Password is not valid"})
+    @Matches(
+        /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[\W_])[A-Za-z\d\W_]{8,}$/,
+        {
+            message: "Password must be at least 8 characters long and include uppercase, lowercase, number, and special character",
+        }
+    )
+    password: string;
 
     @IsNotEmpty({message: "Type can't be empty"})
     @IsNumber()
@@ -32,6 +43,11 @@ export class OtpDto {
     @IsNotEmpty({message: "Kode OTP tidak boleh kosong"})
     @IsNumber()
     code: number;
+
+    @IsOptional()
+    @IsNotEmpty({message: "Type can't be empty"})
+    @IsString({message: "Type is not valid"})
+    type: string;
 }
 
 export class ForgotPasswordDto {
@@ -56,8 +72,24 @@ export class ResendOtpDto {
     signature: string;
 }
 
+export class ResetPasswordDto {
+    @IsNotEmpty({message: "Signature tidak boleh kosong"})
+    @IsString({message: "Signature tidak sesuai"})
+    signature: string;
+
+    @IsNotEmpty({message: "Password tidak boleh kosong"})
+    @IsString({message: "Password tidak sesuai"})
+    @Matches(
+        /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[\W_])[A-Za-z\d\W_]{8,}$/,
+        {
+            message: "Password must be at least 8 characters long and include uppercase, lowercase, number, and special character",
+        }
+    )
+    password: string;
+}
+
 export class RefreshTokenDto {
     @IsNotEmpty({message: "Refresh token can't be empty"})
     @IsString({message: "Refresh token is not valid"})
-    token: string;
+    refresh_token: string;
 }
