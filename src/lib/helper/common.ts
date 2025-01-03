@@ -119,3 +119,15 @@ export function encodeImage(imagePath: string): string {
 export function substringNumber(str: number, length: number) {
     return parseInt(str.toString().substring(0, length));
 }
+
+export function checkPicturePath(picture: string) {
+    // check if picture had storage.googleapis.com in it
+    if (picture.includes("storage.googleapis.com")) {
+        return picture;
+    }
+
+    const HOST = process.env.STORAGE_LOCAL_HOST;
+    const PATH = process.env.STORAGE_LOCAL_PATH;
+
+    return process.env.STORAGE == "local" ? `${HOST + PATH + picture}` : picture;
+}

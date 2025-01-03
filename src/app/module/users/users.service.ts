@@ -4,7 +4,13 @@ import timezone from "dayjs/plugin/timezone";
 import utc from "dayjs/plugin/utc";
 import "dayjs/locale/id";
 
-import {CreateNameFromEmail, CreateSlug, GenerateRandomNumber, ToCamelCase} from "@/lib/helper/common";
+import {
+    checkPicturePath,
+    CreateNameFromEmail,
+    CreateSlug,
+    GenerateRandomNumber,
+    ToCamelCase
+} from "@/lib/helper/common";
 import {CustomHttpExceptionError} from "@/lib/helper/customError";
 import {UploadFile} from "@/lib/storage/uploader";
 import MetaPagination from "@/lib/helper/pagination";
@@ -27,7 +33,6 @@ const TIMEZONE = 'Asia/Jakarta';
 export class UserService {
     constructor(
         private readonly userRepository: Repository<EntityUser>,
-        private readonly userDataRepository: Repository<EntityUserData>
     ) {
     }
 
@@ -73,6 +78,14 @@ export class UserService {
 
         const formattedUsers = users.map((user) => ({
             ...user,
+            user_data: {
+                ...user.user_data,
+                province: ToCamelCase(user.user_data.province || null),
+                city: ToCamelCase(user.user_data.city || null),
+                district: ToCamelCase(user.user_data.district || null),
+                phone: user.user_data.phone,
+                profile: checkPicturePath(user.user_data.profile),
+            },
             created_at: dayjs(user.created_at).tz(TIMEZONE).locale('id').format('D MMMM YYYY HH:mm'),
         }));
 
@@ -151,6 +164,7 @@ export class UserService {
                 city: await ToCamelCase(user.user_data.city || null),
                 district: await ToCamelCase(user.user_data.district || null),
                 phone: user.user_data.phone, // Include phone from user_data
+                profile: checkPicturePath(user.user_data.profile),
             },
             role: {
                 ...user.role,
@@ -338,12 +352,7 @@ export class UserService {
             await queryRunner.commitTransaction();
 
             // Fetch updated user data
-            const userData = await this.GetUserByParams({email: user.email});
-
-            return {
-                data: userData,
-                message: "User profile updated successfully",
-            };
+            return await this.GetUserByParams({email: user.email});
         } catch (error) {
             // Rollback transaction in case of an error
             await queryRunner.rollbackTransaction();
@@ -358,7 +367,10 @@ export class UserService {
         const existUser = await this.userRepository.findOneBy({id});
         if (!existUser) throw new CustomHttpExceptionError('User not found', 404)
         const imageUrl = await UploadFile(file);
-        return await this.userDataRepository.update(existUser.id, {profile: imageUrl});
+        await this.UpdateUserPatch(id, {profile: imageUrl});
+
+        // Fetch updated user data
+        return await this.GetUserByParams({user_id: id});
     }
 
     async Delete(id: string): Promise<{ affected?: number }> {

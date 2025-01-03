@@ -11,7 +11,6 @@ import {EntityUserToken, EntityOtpData} from "./module/auth/auth.model";
 import {UserController} from "./module/users/users.controller";
 import {UserService} from "./module/users/users.service";
 import {EntityUser} from "./module/users/users.model";
-import {EntityUserData} from "@/app/module/users/userData.model";
 
 import {RoleController} from "@/app/module/role/role.controller";
 import {RoleService} from "@/app/module/role/role.service";
@@ -46,7 +45,7 @@ export class App {
         const authService = new AuthService(AppDataSource.getRepository(EntityUserToken), AppDataSource.getRepository(EntityOtpData), AppDataSource.getRepository(EntityUser));
         const profileService = new ProfileService(AppDataSource.getRepository(EntityNotification));
         const roleService = new RoleService(AppDataSource.getRepository(EntityRole));
-        const userService = new UserService(AppDataSource.getRepository(EntityUser), AppDataSource.getRepository(EntityUserData));
+        const userService = new UserService(AppDataSource.getRepository(EntityUser));
 
         // controller dependency injection
         const authController = new AuthController(authService, userService, roleService);

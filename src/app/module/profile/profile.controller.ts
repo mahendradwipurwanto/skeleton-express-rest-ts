@@ -4,6 +4,25 @@ import {ResponseSuccessBuilder} from "@/lib/helper/response";
 import {ProfileService} from "./profile.service";
 import {UserService} from "@/app/module/users/users.service";
 import {CustomHttpExceptionError} from "@/lib/helper/customError";
+import {Limiter} from "@/app/middleware/limiter";
+import multer from "multer";
+
+// multer image upload preparation
+const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const IMAGE_MAX_SIZE_BYTES = 2 * 1024 * 1024; // 1 MB
+
+const storage = multer.memoryStorage();
+
+const upload = multer({
+    storage: storage,
+    limits: {fileSize: IMAGE_MAX_SIZE_BYTES},
+    fileFilter: (_req, file: Express.Multer.File, callback: multer.FileFilterCallback) => {
+        if (!allowedTypes.includes(file.mimetype)) {
+            return callback(new CustomHttpExceptionError('Invalid file type. Only jpg, png, jpeg, and webp files are allowed.', 400));
+        }
+        callback(null, true);
+    }
+});
 
 export class ProfileController {
     public router: Router;
@@ -19,7 +38,8 @@ export class ProfileController {
 
     private initializeRoutes() {
         this.router.get('/', this.getUserProfile);
-        this.router.patch('/', this.updateUserProfile);
+        this.router.patch('/', Limiter(5 * 1000, 1), this.updateUserProfile);
+        this.router.put('/picture', Limiter(5 * 1000, 1), upload.single("file"), this.updateProfilePicture);
         this.router.get('/notification', this.getNotificationByUser);
     }
 
@@ -45,6 +65,20 @@ export class ProfileController {
             const result = await this.userService.UpdateUserPatch(userId, data);
 
             return ResponseSuccessBuilder(res, 200, "Success updating user data", result);
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    updateProfilePicture = async (req, res, next) => {
+        try {
+            const id: string = req.id;
+            const file: Express.Multer.File | undefined = req.file;
+            if (!file) {
+                throw new CustomHttpExceptionError("Image required", 400);
+            }
+            const result = await this.userService.UploadPhoto(id, file);
+            return ResponseSuccessBuilder(res, 200, "Success update the profile picture", result);
         } catch (error) {
             next(error);
         }
